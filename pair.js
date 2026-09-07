@@ -1,177 +1,373 @@
-const { makeid } = require('./gen-id');
-const express = require('express');
-const fs = require('fs');
-let router = express.Router();
-const pino = require("pino");
-const { default: makeWASocket, useMultiFileAuthState, delay, Browsers, makeCacheableSignalKeyStore, getAggregateVotesInPollMessage, DisconnectReason, WA_DEFAULT_EPHEMERAL, jidNormalizedUser, proto, getDevice, generateWAMessageFromContent, fetchLatestBaileysVersion, makeInMemoryStore, getContentType, generateForwardMessageContent, downloadContentFromMessage, jidDecode } = require('@whiskeysockets/baileys')
+import { Router } from 'express';
+import { makeWaSocket } from './whatsapp.js';
+import { globalSessions } from './index.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const { upload } = require('./mega');
-function removeFile(FilePath) {
-    if (!fs.existsSync(FilePath)) return false;
-    fs.rmSync(FilePath, { recursive: true, force: true });
-}
-router.get('/', async (req, res) => {
-    const id = makeid();
-    let num = req.query.number;
-    async function MALVIN_XD_PAIR_CODE() {
-        const {
-            state,
-            saveCreds
-        } = await useMultiFileAuthState('./temp/' + id);
-        try {
-var items = ["Safari"];
-function selectRandomItem(array) {
-  var randomIndex = Math.floor(Math.random() * array.length);
-  return array[randomIndex];
-}
-var randomItem = selectRandomItem(items);
-            
-            let sock = makeWASocket({
-                auth: {
-                    creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
-                },
-                printQRInTerminal: false,
-                generateHighQualityLinkPreview: true,
-                logger: pino({ level: "fatal" }).child({ level: "fatal" }),
-                syncFullHistory: false,
-                browser: Browsers.macOS(randomItem)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const router = Router();
+
+// ===== GENERATE PAIRING CODE =====
+router.post('/', async (req, res) => {
+    try {
+        const { number, sessionId } = req.body;
+        
+        if (!number) {
+            return res.status(400).json({
+                success: false,
+                message: 'Phone number is required'
             });
-            if (!sock.authState.creds.registered) {
-                await delay(1500);
-                num = num.replace(/[^0-9]/g, '');
-                const code = await sock.requestPairingCode(num);
-                if (!res.headersSent) {
-                    await res.send({ code });
-                }
+        }
+
+        // Format the number (remove any non-numeric characters)
+        const formattedNumber = number.replace(/[^0-9]/g, '');
+        
+        // Validate number (basic check)
+        if (formattedNumber.length < 10) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid phone number. Please include country code.'
+            });
+        }
+        
+        // Generate a session ID if not provided
+        const sessionIdToUse = sessionId || `pair_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+        
+        // Create a new WhatsApp socket for pairing
+        const sock = await makeWaSocket(formattedNumber);
+        
+        // Generate pairing code
+        const code = await sock.requestPairingCode(formattedNumber);
+        
+        // Store session in global sessions
+        globalSessions.pair.set(sessionIdToUse, {
+            number: formattedNumber,
+            code: code,
+            timestamp: Date.now(),
+            sock: sock,
+            status: 'paired',
+            type: 'pair',
+            createdAt: new Date().toISOString()
+        });
+
+        // Also store in session success storage
+        if (globalSessions.sessionSuccess) {
+            globalSessions.sessionSuccess.set(sessionIdToUse, {
+                id: sessionIdToUse,
+                type: 'pair',
+                number: formattedNumber,
+                createdAt: new Date().toISOString(),
+                status: 'active'
+            });
+        }
+
+        // Return success response with session info
+        res.json({
+            success: true,
+            code: code,
+            sessionId: sessionIdToUse,
+            number: formattedNumber,
+            message: '✅ Pairing code generated successfully!',
+            instructions: 'Open WhatsApp > Linked Devices > Link with phone number and enter this code',
+            viewPage: `/session/session-success/${sessionIdToUse}?number=${formattedNumber}&type=pair`,
+            channels: {
+                telegram: 'https://t.me/marinyametech',
+                youtube: 'https://youtube.com/@marinyametech',
+                website: 'https://Marinyame.zone.id'
+            },
+            warning: 'Do NOT share your session ID or pairing code with anyone.'
+        });
+
+    } catch (error) {
+        console.error('Pairing error:', error);
+        
+        // Check for specific errors
+        let errorMessage = error.message || 'Failed to generate pairing code';
+        if (errorMessage.includes('not-authorized')) {
+            errorMessage = 'Invalid phone number or not registered on WhatsApp';
+        } else if (errorMessage.includes('timeout')) {
+            errorMessage = 'Request timed out. Please try again.';
+        } else if (errorMessage.includes('rate-overlimit')) {
+            errorMessage = 'Too many attempts. Please wait a few minutes.';
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: errorMessage,
+            error: error.message
+        });
+    }
+});
+
+// ===== GENERATE PAIRING CODE WITH REDIRECT =====
+router.post('/generate-redirect', async (req, res) => {
+    try {
+        const { number } = req.body;
+        
+        if (!number) {
+            return res.status(400).json({
+                success: false,
+                message: 'Phone number is required'
+            });
+        }
+
+        const formattedNumber = number.replace(/[^0-9]/g, '');
+        const sessionId = `pair_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+        
+        const sock = await makeWaSocket(formattedNumber);
+        const code = await sock.requestPairingCode(formattedNumber);
+        
+        globalSessions.pair.set(sessionId, {
+            number: formattedNumber,
+            code: code,
+            timestamp: Date.now(),
+            sock: sock,
+            status: 'paired',
+            type: 'pair',
+            createdAt: new Date().toISOString()
+        });
+
+        // Redirect to session success page
+        res.redirect(`/session/session-success/${sessionId}?number=${formattedNumber}&type=pair`);
+
+    } catch (error) {
+        console.error('Pairing redirect error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+// ===== GET ALL PAIR SESSIONS =====
+router.get('/sessions', (req, res) => {
+    try {
+        const sessions = Array.from(globalSessions.pair.entries()).map(([id, data]) => ({
+            sessionId: id,
+            type: 'pair',
+            number: data.number,
+            code: data.code,
+            status: data.status || 'active',
+            timestamp: data.timestamp,
+            createdAt: data.createdAt || new Date(data.timestamp).toISOString(),
+            age: Math.floor((Date.now() - (data.timestamp || Date.now())) / 1000)
+        }));
+        
+        res.json({
+            success: true,
+            count: sessions.length,
+            sessions: sessions
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+// ===== GET SPECIFIC PAIR SESSION =====
+router.get('/session/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        const session = globalSessions.pair.get(id);
+        
+        if (!session) {
+            return res.status(404).json({
+                success: false,
+                message: 'Session not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            session: {
+                sessionId: id,
+                type: 'pair',
+                number: session.number,
+                code: session.code,
+                status: session.status,
+                timestamp: session.timestamp,
+                createdAt: session.createdAt || new Date(session.timestamp).toISOString(),
+                age: Math.floor((Date.now() - (session.timestamp || Date.now())) / 1000)
             }
-            sock.ev.on('creds.update', saveCreds);
-            sock.ev.on("connection.update", async (s) => {
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
 
-    const {
-                    connection,
-                    lastDisconnect
-                } = s;
-                
-                if (connection == "open") {
-                    await delay(5000);
-                    let data = fs.readFileSync(__dirname + `/temp/${id}/creds.json`);
-                    let rf = __dirname + `/temp/${id}/creds.json`;
-                    function generateRandomText() {
-                        const prefix = "3EB";
-                        const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                        let randomText = prefix;
-                        for (let i = prefix.length; i < 22; i++) {
-                            const randomIndex = Math.floor(Math.random() * characters.length);
-                            randomText += characters.charAt(randomIndex);
-                        }
-                        return randomText;
-                    }
-                    const randomText = generateRandomText();
-                    try {
-
-
-                        
-                        const { upload } = require('./mega');
-                        const mega_url = await upload(fs.createReadStream(rf), `${sock.user.id}.json`);
-                        const string_session = mega_url.replace('https://mega.nz/file/', '');
-                        let md = "malvin~" + string_session;
-                        let code = await sock.sendMessage(sock.user.id, { text: md });
-                        let desc = `*Hey there, MALVIN-XD User!* 👋🏻
-
-Thanks for using *MALVIN-XD* — your session has been successfully created!
-
-🔐 *Session ID:* Sent above  
-⚠️ *Keep it safe!* Do NOT share this ID with anyone.
-
-——————
-
-*✅ Stay Updated:*  
-Join our official WhatsApp Channel:  
-https://whatsapp.com/channel/0029VbA6MSYJUM2TVOzCSb2A
-
-*💻 Source Code:*  
-Fork & explore the project on GitHub:  
-https://github.com/XdKing2/MALVIN-XD
-
-——————
-
-> *© Powered by Malvin King*
-Stay cool and hack smart. ✌🏻`; 
-                        await sock.sendMessage(sock.user.id, {
-text: desc,
-contextInfo: {
-externalAdReply: {
-title: "ᴍᴀʟᴠɪɴ-xᴅ",
-thumbnailUrl: "https://files.catbox.moe/bqs70b.jpg",
-sourceUrl: "https://whatsapp.com/channel/0029VbA6MSYJUM2TVOzCSb2A",
-mediaType: 1,
-renderLargerThumbnail: true
-}  
-}
-},
-{quoted:code })
-                    } catch (e) {
-                            let ddd = sock.sendMessage(sock.user.id, { text: e });
-                            let desc = `Hey there, MALVIN-XD User!* 👋🏻
-
-Thanks for using *MALVIN-XD* — your session has been successfully created!
-
-🔐 *Session ID:* Sent above  
-⚠️ *Keep it safe!* Do NOT share this ID with anyone.
-
-——————
-
-*✅ Stay Updated:*  
-Join our official WhatsApp Channel:  
-https://whatsapp.com/channel/0029VbA6MSYJUM2TVOzCSb2A
-
-*💻 Source Code:*  
-Fork & explore the project on GitHub:  
-https://github.com/XdKing2/MALVIN-XD
-
-——————
-
-> *© Powered by Malvin King*
-Stay cool and hack smart. ✌🏻`;
-                            await sock.sendMessage(sock.user.id, {
-text: desc,
-contextInfo: {
-externalAdReply: {
-title: "ᴍᴀʟᴠɪɴ-xᴅ",
-thumbnailUrl: "https://i.imgur.com/GVW7aoD.jpeg",
-sourceUrl: "https://whatsapp.com/channel/0029VbA6MSYJUM2TVOzCSb2A",
-mediaType: 2,
-renderLargerThumbnail: true,
-showAdAttribution: true
-}  
-}
-},
-{quoted:ddd })
-                    }
-                    await delay(10);
-                    await sock.ws.close();
-                    await removeFile('./temp/' + id);
-                    console.log(`👤 ${sock.user.id} 𝗖𝗼𝗻𝗻𝗲𝗰𝘁𝗲𝗱 ✅ 𝗥𝗲𝘀𝘁𝗮𝗿𝘁𝗶𝗻𝗴 𝗽𝗿𝗼𝗰𝗲𝘀𝘀...`);
-                    await delay(10);
-                    process.exit();
-                } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode != 401) {
-                    await delay(10);
-                    MALVIN_XD_PAIR_CODE();
-                }
+// ===== DELETE PAIR SESSION =====
+router.delete('/session/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const session = globalSessions.pair.get(id);
+        
+        if (!session) {
+            return res.status(404).json({
+                success: false,
+                message: 'Session not found'
             });
-        } catch (err) {
-            console.log("service restated");
-            await removeFile('./temp/' + id);
-            if (!res.headersSent) {
-                await res.send({ code: "❗ Service Unavailable" });
+        }
+
+        // Close socket if exists
+        if (session.sock) {
+            try {
+                await session.sock.logout();
+                await session.sock.end();
+                await session.sock.destroy();
+            } catch (error) {
+                console.error('Error closing session socket:', error);
             }
         }
+
+        // Delete session folder if exists
+        const sessionPath = path.join(__dirname, 'sessions', id);
+        if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+        }
+
+        globalSessions.pair.delete(id);
+        
+        res.json({
+            success: true,
+            message: '✅ Session deleted successfully',
+            sessionId: id,
+            deletedAt: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('Error deleting session:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
-   return await MALVIN_XD_PAIR_CODE();
-});/*
-setInterval(() => {
-    console.log("☘️ 𝗥𝗲𝘀𝘁𝗮𝗿𝘁𝗶𝗻𝗴 𝗽𝗿𝗼𝗰𝗲𝘀𝘀...");
-    process.exit();
-}, 180000); //30min*/
-module.exports = router;
+});
+
+// ===== CHECK PAIRING STATUS =====
+router.get('/status/:sessionId', (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const session = globalSessions.pair.get(sessionId);
+        
+        if (!session) {
+            return res.status(404).json({
+                success: false,
+                message: 'Session not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            sessionId: sessionId,
+            number: session.number,
+            status: session.status || 'active',
+            hasCode: !!session.code,
+            timestamp: session.timestamp,
+            age: Math.floor((Date.now() - session.timestamp) / 1000)
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+// ===== REGENERATE PAIRING CODE =====
+router.post('/regenerate/:sessionId', async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const session = globalSessions.pair.get(sessionId);
+        
+        if (!session) {
+            return res.status(404).json({
+                success: false,
+                message: 'Session not found'
+            });
+        }
+
+        // Generate new pairing code
+        const newCode = await session.sock.requestPairingCode(session.number);
+        
+        session.code = newCode;
+        session.timestamp = Date.now();
+        session.status = 'regenerated';
+        globalSessions.pair.set(sessionId, session);
+
+        res.json({
+            success: true,
+            message: 'Pairing code regenerated successfully',
+            sessionId: sessionId,
+            code: newCode,
+            number: session.number
+        });
+
+    } catch (error) {
+        console.error('Regenerate pairing error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+// ===== BULK DELETE SESSIONS =====
+router.delete('/sessions/bulk', async (req, res) => {
+    try {
+        const { sessionIds } = req.body;
+        
+        if (!sessionIds || !Array.isArray(sessionIds) || sessionIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Session IDs array is required'
+            });
+        }
+
+        let deleted = 0;
+        let failed = 0;
+
+        for (const id of sessionIds) {
+            try {
+                const session = globalSessions.pair.get(id);
+                if (session) {
+                    if (session.sock) {
+                        await session.sock.logout();
+                        await session.sock.end();
+                        await session.sock.destroy();
+                    }
+                    globalSessions.pair.delete(id);
+                    deleted++;
+                } else {
+                    failed++;
+                }
+            } catch (error) {
+                failed++;
+                console.error(`Error deleting session ${id}:`, error);
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Deleted ${deleted} sessions, ${failed} failed`,
+            deleted: deleted,
+            failed: failed
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+export default router;
