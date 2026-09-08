@@ -2,10 +2,10 @@ import express from 'express';
 import bodyParser from 'body-parser';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import fs from 'fs';
 
 // Import routers
 import pairRouter from './pair.js';
-import sessionRouter from './session.js';
 
 // Resolve directory paths
 const __filename = fileURLToPath(import.meta.url);
@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 8000;
 // ===== GLOBAL SESSION STORAGE =====
 export const globalSessions = {
     pair: new Map(),
-    sessionSuccess: new Map() // For session success tracking
+    sessionSuccess: new Map()
 };
 
 // Increase max listeners to handle multiple connections
@@ -37,9 +37,8 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'pair.html'));
 });
 
-// Use routers
+// Use pair router ONLY - session router is not needed
 app.use('/pair', pairRouter);
-app.use('/session', sessionRouter);
 
 // ===== API ROUTES =====
 
@@ -47,10 +46,12 @@ app.use('/session', sessionRouter);
 app.get('/api/sessions', (req, res) => {
     try {
         const pairSessions = Array.from(globalSessions.pair.entries()).map(([id, data]) => ({
-            sessionId: id,
+            sessionId: data.sessionId || id,
+            internalId: id,
             type: 'pair',
             number: data.number,
             status: data.status || 'active',
+            connected: !!data.connected,
             timestamp: data.timestamp,
             createdAt: data.createdAt || new Date(data.timestamp).toISOString(),
             age: Math.floor((Date.now() - (data.timestamp || Date.now())) / 1000)
@@ -88,16 +89,24 @@ app.get('/api/session/:id', (req, res) => {
         const response = {
             success: true,
             session: {
-                sessionId: id,
+                sessionId: session.sessionId || id,
+                internalId: id,
                 type: type,
-                ...session,
-                createdAt: session.createdAt || new Date(session.timestamp).toISOString()
+                number: session.number,
+                status: session.status,
+                connected: !!session.connected,
+                createdAt: session.createdAt || new Date(session.timestamp).toISOString(),
+                timestamp: session.timestamp,
+                age: Math.floor((Date.now() - (session.timestamp || Date.now())) / 1000)
             }
         };
 
         // Don't send sensitive data
         if (response.session.sock) {
             delete response.session.sock;
+        }
+        if (response.session.socket) {
+            delete response.session.socket;
         }
 
         res.json(response);
@@ -121,19 +130,36 @@ app.delete('/api/session/:id', async (req, res) => {
             session = globalSessions.pair.get(id);
             if (session.sock) {
                 try {
-                    await session.sock.logout();
-                    await session.sock.end();
-                    await session.sock.destroy();
+                    if (typeof session.sock.logout === 'function') {
+                        await session.sock.logout();
+                    }
+                    if (typeof session.sock.end === 'function') {
+                        await session.sock.end();
+                    }
+                    if (typeof session.sock.destroy === 'function') {
+                        await session.sock.destroy();
+                    }
                 } catch (error) {
                     console.error('Error logging out session:', error);
                 }
             }
+            
+            // Delete session folder
+            const sessionPath = session.sessionPath || path.join(__dirname, 'sessions', id);
+            if (fs.existsSync(sessionPath)) {
+                try {
+                    fs.rmSync(sessionPath, { recursive: true, force: true });
+                } catch (error) {
+                    console.error('Error deleting session folder:', error);
+                }
+            }
+            
             globalSessions.pair.delete(id);
             deleted = true;
         }
 
         // Also delete from session success storage
-        if (globalSessions.sessionSuccess.has(id)) {
+        if (globalSessions.sessionSuccess && globalSessions.sessionSuccess.has(id)) {
             globalSessions.sessionSuccess.delete(id);
         }
 
@@ -146,7 +172,7 @@ app.delete('/api/session/:id', async (req, res) => {
 
         res.json({
             success: true,
-            message: 'Session deleted successfully',
+            message: '✅ Session deleted successfully',
             sessionId: id,
             deletedAt: new Date().toISOString()
         });
@@ -197,12 +223,27 @@ app.post('/api/cleanup', (req, res) => {
             if (now - timestamp > maxAge) {
                 if (data.sock) {
                     try {
-                        data.sock.end();
-                        data.sock.destroy();
+                        if (typeof data.sock.end === 'function') {
+                            data.sock.end();
+                        }
+                        if (typeof data.sock.destroy === 'function') {
+                            data.sock.destroy();
+                        }
                     } catch (error) {
                         // Ignore errors
                     }
                 }
+                
+                // Delete session folder
+                const sessionPath = data.sessionPath || path.join(__dirname, 'sessions', id);
+                if (fs.existsSync(sessionPath)) {
+                    try {
+                        fs.rmSync(sessionPath, { recursive: true, force: true });
+                    } catch (error) {
+                        // Ignore errors
+                    }
+                }
+                
                 globalSessions.pair.delete(id);
                 cleaned++;
             }
@@ -210,7 +251,7 @@ app.post('/api/cleanup', (req, res) => {
 
         res.json({
             success: true,
-            message: `Cleaned up ${cleaned} expired sessions`,
+            message: `🧹 Cleaned up ${cleaned} expired sessions`,
             cleaned: cleaned,
             remaining: globalSessions.pair.size
         });
@@ -238,7 +279,7 @@ app.get('/health', (req, res) => {
 
 // ===== ERROR HANDLING =====
 app.use((err, req, res, next) => {
-    console.error('Error:', err);
+    console.error('❌ Error:', err);
     res.status(500).json({
         success: false,
         message: err.message || 'Internal Server Error',
@@ -249,9 +290,10 @@ app.use((err, req, res, next) => {
 // ===== START SERVER =====
 app.listen(PORT, () => {
     console.log('🚀 ====================================');
-    console.log('📱 WhatsApp Bot Server');
+    console.log('📱 MARINYAMETECH WhatsApp Bot');
     console.log('🚀 ====================================');
     console.log(`🔗 Server running on http://localhost:${PORT}`);
+    console.log(`📁 Session directory: ${path.join(__dirname, 'sessions')}`);
     console.log('📋 ====================================');
     console.log('📋 Available Endpoints:');
     console.log('   GET  /                     - Home page');
@@ -267,12 +309,9 @@ app.listen(PORT, () => {
     console.log('   GET  /pair/sessions        - List pair sessions');
     console.log('   GET  /pair/session/:id     - Get pair session');
     console.log('   DELETE /pair/session/:id   - Delete pair session');
-    console.log('📋 Session Endpoints:');
-    console.log('   GET  /session/sessions     - List all sessions');
-    console.log('   GET  /session/:id          - Get session details');
-    console.log('   DELETE /session/:id        - Delete session');
-    console.log('   GET  /session/session-success/:id - Success page');
-    console.log('🚀 ====================================');
+    console.log('   GET  /pair/status/:id      - Check status');
+    console.log('   POST /pair/regenerate/:id  - Regenerate code');
+    console.log('📋 ====================================');
     console.log('👨‍💻 YouTube: @marinyametech');
     console.log('🐙 GitHub: @mrmosesclr');
     console.log('🚀 ====================================');
@@ -285,18 +324,31 @@ setInterval(() => {
     const maxAge = 30 * 60 * 1000; // 30 minutes
     let cleaned = 0;
 
-    // Clean pair sessions
     for (const [id, data] of globalSessions.pair.entries()) {
         const timestamp = data.timestamp || Date.now();
         if (now - timestamp > maxAge) {
             if (data.sock) {
                 try {
-                    data.sock.end();
-                    data.sock.destroy();
+                    if (typeof data.sock.end === 'function') {
+                        data.sock.end();
+                    }
+                    if (typeof data.sock.destroy === 'function') {
+                        data.sock.destroy();
+                    }
                 } catch (error) {
                     // Ignore errors
                 }
             }
+            
+            const sessionPath = data.sessionPath || path.join(__dirname, 'sessions', id);
+            if (fs.existsSync(sessionPath)) {
+                try {
+                    fs.rmSync(sessionPath, { recursive: true, force: true });
+                } catch (error) {
+                    // Ignore errors
+                }
+            }
+            
             globalSessions.pair.delete(id);
             cleaned++;
         }
