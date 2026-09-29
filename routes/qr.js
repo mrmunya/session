@@ -210,4 +210,334 @@ router.get('/', async (req, res) => {
         .back-btn:hover {
             transform: translateY(-2px);
 
-            box
+            box-shadow:
+                0 6px 20px rgba(0,0,0,0.3);
+        }
+
+        .pulse {
+            animation:
+                pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow:
+                    0 0 0 0
+                    rgba(255,255,255,0.4);
+            }
+
+            70% {
+                box-shadow:
+                    0 0 0 15px
+                    rgba(255,255,255,0);
+            }
+
+            100% {
+                box-shadow:
+                    0 0 0 0
+                    rgba(255,255,255,0);
+            }
+        }
+
+        @media (max-width: 480px) {
+            .qr-container {
+                width: 260px;
+                height: 260px;
+            }
+
+            .qr-code {
+                width: 220px;
+                height: 220px;
+            }
+
+            h1 {
+                font-size: 24px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>BMX-BOT QR CODE</h1>
+
+        <div class="qr-container">
+
+            <div class="qr-code pulse">
+
+                <img
+                    src="${qrImage}"
+                    alt="QR Code"
+                />
+
+            </div>
+
+        </div>
+
+        <p>
+            Scan this QR code with your phone
+            to connect
+        </p>
+
+        <a
+            href="./"
+            class="back-btn"
+        >
+            Back
+        </a>
+
+    </div>
+
+    <script>
+        const button =
+            document.querySelector('.back-btn');
+
+        button.addEventListener(
+            'mousedown',
+            function () {
+                this.style.transform =
+                    'translateY(1px)';
+
+                this.style.boxShadow =
+                    '0 2px 10px rgba(0,0,0,0.2)';
+            }
+        );
+
+        button.addEventListener(
+            'mouseup',
+            function () {
+                this.style.transform =
+                    'translateY(-2px)';
+
+                this.style.boxShadow =
+                    '0 6px 20px rgba(0,0,0,0.3)';
+            }
+        );
+    </script>
+
+</body>
+</html>
+`);
+
+                                responseSent = true;
+                            }
+
+                        } catch (qrError) {
+                            console.error(
+                                'QR generation error:',
+                                qrError
+                            );
+                        }
+                    }
+
+                    /*
+                     * CONNECTION OPEN
+                     */
+                    if (connection === 'open') {
+
+                        console.log(
+                            'BMX-BOT connected successfully'
+                        );
+
+                        try {
+                            /*
+                             * Optional newsletter follow.
+                             *
+                             * Keep this disabled unless
+                             * you specifically need it.
+                             */
+
+                            // await sock.newsletterFollow(
+                            //     "1203632813@newsletter"
+                            // );
+
+                        } catch (error) {
+                            console.error(
+                                'Newsletter error:',
+                                error
+                            );
+                        }
+
+                        await delay(10000);
+
+                        /*
+                         * Wait for credentials to be
+                         * saved.
+                         */
+                        let sessionData = null;
+
+                        let attempts = 0;
+
+                        const maxAttempts = 10;
+
+                        while (
+                            attempts < maxAttempts &&
+                            !sessionData
+                        ) {
+                            try {
+                                const credsPath =
+                                    path.join(
+                                        sessionDir,
+                                        id,
+                                        'creds.json'
+                                    );
+
+                                if (
+                                    fs.existsSync(
+                                        credsPath
+                                    )
+                                ) {
+                                    const data =
+                                        fs.readFileSync(
+                                            credsPath
+                                        );
+
+                                    if (
+                                        data &&
+                                        data.length > 100
+                                    ) {
+                                        sessionData = data;
+                                        break;
+                                    }
+                                }
+
+                                await delay(2000);
+
+                                attempts++;
+
+                            } catch (readError) {
+
+                                console.error(
+                                    'Read error:',
+                                    readError
+                                );
+
+                                await delay(2000);
+
+                                attempts++;
+                            }
+                        }
+
+                        if (!sessionData) {
+                            console.error(
+                                'Credentials were not found.'
+                            );
+
+                            await cleanUpSession();
+
+                            return;
+                        }
+
+                        /*
+                         * IMPORTANT:
+                         *
+                         * Do not send raw creds.json
+                         * as a transferable credential.
+                         *
+                         * Keep the authentication state
+                         * on the server or use your
+                         * protected session mechanism.
+                         */
+
+                        try {
+
+                            console.log(
+                                'BMX-BOT QR session created successfully.'
+                            );
+
+                            await delay(2000);
+
+                            try {
+                                sock.ws.close();
+                            } catch (closeError) {
+                                console.error(
+                                    'Socket close error:',
+                                    closeError
+                                );
+                            }
+
+                        } catch (sessionError) {
+
+                            console.error(
+                                'Session processing error:',
+                                sessionError
+                            );
+
+                        } finally {
+
+                            await cleanUpSession();
+                        }
+                    }
+
+                    /*
+                     * CONNECTION CLOSED
+                     */
+                    else if (
+                        connection === 'close' &&
+                        lastDisconnect &&
+                        lastDisconnect.error &&
+                        lastDisconnect.error.output &&
+                        lastDisconnect.error.output.statusCode !== 401
+                    ) {
+
+                        console.log(
+                            'Connection closed. Reconnecting...'
+                        );
+
+                        await delay(10000);
+
+                        BMX_BOT_QR_CODE();
+                    }
+                }
+            );
+
+        } catch (err) {
+
+            console.error(
+                'Main error:',
+                err
+            );
+
+            if (
+                !responseSent &&
+                !res.headersSent
+            ) {
+                res.status(500).json({
+                    code:
+                        'QR Service is Currently Unavailable'
+                });
+
+                responseSent = true;
+            }
+
+            await cleanUpSession();
+        }
+    }
+
+    try {
+
+        await BMX_BOT_QR_CODE();
+
+    } catch (finalError) {
+
+        console.error(
+            'Final error:',
+            finalError
+        );
+
+        await cleanUpSession();
+
+        if (
+            !responseSent &&
+            !res.headersSent
+        ) {
+            res.status(500).json({
+                code: 'Service Error'
+            });
+        }
+    }
+});
+
+module.exports = router;
