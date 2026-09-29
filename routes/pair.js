@@ -1,5 +1,5 @@
 const {
-    BMX-BOTId,
+    BMX - BOTId,
     removeFile,
     generateRandomCode
 } = require('../ids');
