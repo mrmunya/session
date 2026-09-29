@@ -3,7 +3,7 @@
   "main": "./index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "pm2 start index.js --deep-monitoring --attach --name EliteProTech",
+    "start": "pm2 start index.js --deep-monitoring --attach --name BMX-BOT",
     "stop": "pm2 stop BMX-BOT",
     "restart": "pm2 restart BMX-BOT"
   },
